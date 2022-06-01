@@ -1,5 +1,8 @@
 using Distributed
+using Printf
 
+# Separate activation statement from @everywhere using statements to make sure 
+# environment activated across all processors before `using` dependencies.
 @everywhere begin
     using DrWatson; quickactivate("..")
 end
@@ -7,6 +10,12 @@ end
 @everywhere begin
     using Agents
     using Agents.Models: schelling, schelling_agent_step!
+end
+
+# Precompile across processors to ensure no lag on first model runs.
+@everywhere begin
+    using Pkg
+    Pkg.precompile()
 end
 
 
@@ -17,13 +26,12 @@ function test_schelling_ensemble_versions(
 
     results = Dict(k => 0.0 for k in versions)
 
-    for version in keys(results)
+    for version in versions
 
         basemodels = [Models.schelling(; numagents)[1] 
                       for numagents in numagents_low:numagents_high]
 
-        models = repeat(basemodels, 
-                        nreplicates)
+        models = repeat(basemodels, nreplicates)
 
         if version == :serial
             results[version] = @elapsed (
@@ -36,35 +44,32 @@ function test_schelling_ensemble_versions(
                              version, parallel = true)
             )
         end
-        println("$version finished in $(results[version])s")
+        @printf "%s finished in %.2fs\n" version results[version]
     end
 
     return results
 end
 
 
+function ensemblerun_benchmark(nreplicates, nsteps, versions=[:serial, :current, :darray])
+    println("ENSEMBLE RUN BENCHMARK, nreplicates=$nreplicates, nsteps=$nsteps")
+    result = test_schelling_ensemble_versions(
+        [:serial, :current, :darray]; nreplicates=nreplicates, nsteps=nsteps
+    )
+    @printf "Parallel-to-serial ratio (current): %.2f\n" result[:current]/result[:serial]
+    @printf "Parallel-to-serial ratio (darray version): %.2f\n\n" result[:darray]/result[:serial]
+end
+
+
 function main()
 
-    println("ENSEMBLE RUN TEST, n_replicates=2, nsteps=100")
-    result = test_schelling_ensemble_versions(
-        [:serial, :current, :darray]; nreplicates=2, nsteps=100
-    )
-    println("Parallel-to-serial ratio (current): $((result[:current]/result[:serial]))")
-    println("Parallel-to-serial ratio (darray version): $(result[:darray]/result[:serial])\n")
-
-    println("ENSEMBLE RUN TEST, n_replicates=4, nsteps=100")
-    result = test_schelling_ensemble_versions(
-        [:serial, :current, :darray]; nreplicates=4, nsteps=100
-    )
-    println("Parallel-to-serial ratio (current): $(result[:current]/result[:serial])")
-    println("Parallel-to-serial ratio (darray version): $(result[:darray]/result[:serial])\n")
-        
-    println("ENSEMBLE RUN TEST, n_replicates=10, nsteps=2000")
-    result = test_schelling_ensemble_versions(
-        [:serial, :darray]; nreplicates=10, nsteps=2000
-    )
-    println("Parallel-to-serial ratio (darray version): $(result[:darray]/result[:serial])")
+    ensemblerun_benchmark(2, 100)
+    ensemblerun_benchmark(4, 100)
+    ensemblerun_benchmark(10, 2000)
+    ensemblerun_benchmark(20, 2000)
+    ensemblerun_benchmark(100, 50)
 
 end
+
 
 main()
